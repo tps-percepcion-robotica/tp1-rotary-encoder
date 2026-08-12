@@ -10,6 +10,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_wifi.h"
 #include "driver/pulse_cnt.h" //driver del periférico PCNT
 #include "driver/gpio.h"
 
@@ -37,13 +38,13 @@ static const char *TAG = "ENCODER";
 #define PCNT_HIGH_LIMIT 100
 #define PCNT_LOW_LIMIT  -100
 
-//Pines del encoder
+// Pines del encoder
 #define GPIO_A 32 // CLK
 #define GPIO_B 33 // DT
 
 // TODO: calibrar girando el eje exactamente una vuelta y viendo cuánto acumuló total_ticks
 #define TICKS_PER_REV     80.0f
-#define PUBLISH_PERIOD_MS 100
+#define PUBLISH_PERIOD_MS 20
 
 static pcnt_unit_handle_t pcnt_unit = NULL;
 static volatile int64_t total_ticks = 0;  // ticks acumulados por wrap-around de hardware (±100)
@@ -135,9 +136,15 @@ static void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
         return;
     }
 
+    // Proteger lectura atómica de total_ticks
+    portMUX_TYPE spinlock = portMUX_INITIALIZER_UNLOCKED;
+    portENTER_CRITICAL(&spinlock);
+    int64_t current_total = total_ticks;
+    portEXIT_CRITICAL(&spinlock);
+
     int raw_count = 0;
     ESP_ERROR_CHECK(pcnt_unit_get_count(pcnt_unit, &raw_count));
-    int32_t current_ticks = (int32_t)(total_ticks + raw_count);
+    int32_t current_ticks = (int32_t)(current_total + raw_count);
 
     int64_t now_us = esp_timer_get_time();
     float dt_s = (last_time_us == 0) ? (PUBLISH_PERIOD_MS / 1000.0f) : (now_us - last_time_us) / 1e6f;
@@ -160,53 +167,76 @@ static void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
 // Tarea micro-ROS: crea el nodo, los publishers y el executor, y los mantiene vivos
 static void micro_ros_task(void *arg)
 {
-    rcl_allocator_t allocator = rcl_get_default_allocator();
-    rclc_support_t support;
+    while (1) {
+        // 1. ESPERA / PING AL AGENTE
+        ESP_LOGI(TAG, "Verificando Agente en IP: %s | Puerto: %s", CONFIG_MICRO_ROS_AGENT_IP, CONFIG_MICRO_ROS_AGENT_PORT);
+        
 
-    rcl_init_options_t init_options = rcl_get_zero_initialized_init_options();
-    RCCHECK(rcl_init_options_init(&init_options, allocator));
+        rcl_allocator_t allocator = rcl_get_default_allocator();
+        rclc_support_t support;
+
+        rcl_init_options_t init_options = rcl_get_zero_initialized_init_options();
+        RCCHECK(rcl_init_options_init(&init_options, allocator));
 
 #ifdef CONFIG_MICRO_ROS_ESP_XRCE_DDS_MIDDLEWARE
-    rmw_init_options_t *rmw_options = rcl_init_options_get_rmw_init_options(&init_options);
-    RCCHECK(rmw_uros_options_set_udp_address(CONFIG_MICRO_ROS_AGENT_IP,
+        rmw_init_options_t *rmw_options = rcl_init_options_get_rmw_init_options(&init_options);
+        RCCHECK(rmw_uros_options_set_udp_address(CONFIG_MICRO_ROS_AGENT_IP,
                                              CONFIG_MICRO_ROS_AGENT_PORT,
                                              rmw_options));
+                                             
 #endif
 
-    RCCHECK(rclc_support_init_with_options(&support, 0, NULL, &init_options, &allocator));
+        // Intentar conectar con el agente directamente vía support_init
+        rcl_ret_t rc = rclc_support_init_with_options(&support, 0, NULL, &init_options, &allocator);
 
-    rcl_node_t node = rcl_get_zero_initialized_node();
-    RCCHECK(rclc_node_init_default(&node, "encoder_node", "", &support));
-    ESP_LOGI(TAG, "Nodo creado correctamente");
+        if (rc != RCL_RET_OK) {
+            ESP_LOGW(TAG, "No se pudo conectar con el Agente (error %d). Reintentando en 2s...", (int)rc);
+            rcl_init_options_fini(&init_options);
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            continue; // Reintentar en el ciclo while
+        }
 
-    RCCHECK(rclc_publisher_init_default(
-        &ticks_publisher, &node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
-        "encoder_ticks"));
+        ESP_LOGI(TAG, "¡Conectado exitosamente al Agente!");
 
-    RCCHECK(rclc_publisher_init_default(
-        &rpm_publisher, &node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
-        "encoder_rpm"));
+        rcl_node_t node = rcl_get_zero_initialized_node();
+        RCCHECK(rclc_node_init_default(&node, "encoder_node", "", &support));
+        ESP_LOGI(TAG, "Nodo creado correctamente");
 
-    rcl_timer_t timer = rcl_get_zero_initialized_timer();
-    RCCHECK(rclc_timer_init_default2(
-        &timer, &support, RCL_MS_TO_NS(PUBLISH_PERIOD_MS), timer_callback, true));
+        RCCHECK(rclc_publisher_init_default(
+            &ticks_publisher, &node,
+            ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
+            "encoder_ticks"));
 
-    rclc_executor_t executor = rclc_executor_get_zero_initialized_executor();
-    RCCHECK(rclc_executor_init(&executor, &support.context, 1, &allocator));
-    RCCHECK(rclc_executor_set_timeout(&executor, RCL_MS_TO_NS(150)));
-    RCCHECK(rclc_executor_add_timer(&executor, &timer));
+        RCCHECK(rclc_publisher_init_default(
+            &rpm_publisher, &node,
+            ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
+            "encoder_rpm"));
 
-    while (1) {
-        rclc_executor_spin_some(&executor, RCL_MS_TO_NS(100));
-        usleep(10000);
+        rcl_timer_t timer = rcl_get_zero_initialized_timer();
+        RCCHECK(rclc_timer_init_default2(
+            &timer, &support, RCL_MS_TO_NS(PUBLISH_PERIOD_MS), timer_callback, true));
+
+        rclc_executor_t executor = rclc_executor_get_zero_initialized_executor();
+        RCCHECK(rclc_executor_init(&executor, &support.context, 1, &allocator));
+        RCCHECK(rclc_executor_set_timeout(&executor, RCL_MS_TO_NS(1)));
+        RCCHECK(rclc_executor_add_timer(&executor, &timer));
+
+        // Bucle de publicación
+        while (1) {
+            rclc_executor_spin_some(&executor, RCL_MS_TO_NS(1));
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+
+        // Limpieza si sale del bucle
+        rcl_publisher_fini(&ticks_publisher, &node);
+        rcl_publisher_fini(&rpm_publisher, &node);
+        rcl_timer_fini(&timer);
+        rclc_executor_fini(&executor);
+        rcl_node_fini(&node);
+        rclc_support_fini(&support);
+
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
-
-    RCCHECK(rcl_publisher_fini(&ticks_publisher, &node));
-    RCCHECK(rcl_publisher_fini(&rpm_publisher, &node));
-    RCCHECK(rcl_node_fini(&node));
-    vTaskDelete(NULL);
 }
 
 void app_main(void)
@@ -214,6 +244,10 @@ void app_main(void)
 #if defined(CONFIG_MICRO_ROS_ESP_NETIF_WLAN) || defined(CONFIG_MICRO_ROS_ESP_NETIF_ENET)
     ESP_ERROR_CHECK(uros_network_interface_initialize());
 #endif
+    
+    // DESACTIVAR POWER SAVE DE WI-FI
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+    ESP_LOGI(TAG, "Wi-Fi Power Save desactivado (WIFI_PS_NONE)");
 
     encoder_init();
 

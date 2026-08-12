@@ -16,11 +16,11 @@ from collections import deque
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 
-//Import para ROS2
+# Import para ROS2
 import rclpy
 from rclpy.node import Node
 
-//Dato usado por los topicos
+# Dato usado por los topicos
 from std_msgs.msg import Int32, Float32
 
 CSV_PATH = "encoder_log.csv"
@@ -30,11 +30,11 @@ HISTORY_LEN = 500  # cantidad de puntos visibles en la curva
 class EncoderMonitor(Node):
     def __init__(self):
         super().__init__('encoder_monitor')
-        //Crea la create_subscription al topicp encoder y su buffer
+        # Crea la create_subscription al topicp encoder y su buffer
         self.create_subscription(Int32, '/encoder_ticks', self.ticks_cb, 10)
         self.create_subscription(Float32, '/encoder_rpm', self.rpm_cb, 10)
 
-        //Guarda su historial y lo muestra usando matplotlib 
+        # Guarda su historial y lo muestra usando matplotlib 
         self.last_rpm = 0.0
         self.t0 = time.time()
         self.time_hist = deque(maxlen=HISTORY_LEN)
