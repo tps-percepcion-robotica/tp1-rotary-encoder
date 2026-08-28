@@ -184,7 +184,7 @@ static void micro_ros_task(void *arg)
                                              CONFIG_MICRO_ROS_AGENT_PORT,
                                              rmw_options));
 
-        rmw_uros_options_set_client_key(esp_random(), rmw_options);
+        //#rmw_uros_options_set_client_key(esp_random(), rmw_options);
                                              
 #endif
 
