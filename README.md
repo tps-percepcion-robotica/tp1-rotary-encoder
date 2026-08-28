@@ -67,6 +67,7 @@ git clone -b jazzy https://github.com/micro-ROS/micro_ros_espidf_component.git
 
 ```bash
 cd rotary_encoder
+. $IDF_PATH/export.sh
 idf.py menuconfig   # micro-ROS Settings: Agent IP/Port, WiFi SSID/Password
 idf.py build
 idf.py flash monitor
