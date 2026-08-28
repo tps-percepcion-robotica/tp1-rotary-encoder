@@ -10,6 +10,7 @@ Uso:
     python3 encoder_monitor.py
 """
 import csv
+import math
 import time
 from collections import deque
 
@@ -25,7 +26,7 @@ from std_msgs.msg import Int32, Float32
 
 CSV_PATH = "encoder_log.csv"
 HISTORY_LEN = 500  # cantidad de puntos visibles en la curva
-
+TICKS_PER_REV = 80  # cantidad de ticks por revolución
 
 class EncoderMonitor(Node):
     def __init__(self):
@@ -69,19 +70,40 @@ def main():
     rclpy.init()
     node = EncoderMonitor()
 
-    fig, ax = plt.subplots()
-    line, = ax.plot([], [])
-    ax.set_xlabel("Tiempo (s)")
-    ax.set_ylabel("Posicion (ticks)")
-    ax.set_title("Historial de posicion del encoder")
+    fig, (ax_circle, ax_hist) = plt.subplots(1, 2, figsize=(11, 5))
+
+    line, = ax_hist.plot([], [])
+    ax_hist.set_xlabel("Tiempo (s)")
+    ax_hist.set_ylabel("Posicion (ticks)")
+    ax_hist.set_title("Historial de posicion del encoder")
+
+    unit_circle = plt.Circle((0, 0), 1.0, color='gray', fill=False, linestyle='--', linewidth=1.5)
+    ax_circle.add_patch(unit_circle)
+    vector_line, = ax_circle.plot([0, 1], [0, 0], color='crimson', linewidth=2.5, marker='o', label='Posición')
+    
+    ax_circle.set_xlim(-1.25, 1.25)
+    ax_circle.set_ylim(-1.25, 1.25)
+    ax_circle.set_aspect('equal')
+    ax_circle.set_title("Posición del Encoder Rotacional")
+    ax_circle.axhline(0, color='lightgray', linewidth=0.8)
+    ax_circle.axvline(0, color='lightgray', linewidth=0.8)
+    ax_circle.grid(True, linestyle='--')
+
 
     def update_plot(_frame):
         rclpy.spin_once(node, timeout_sec=0.01)
+
         if node.time_hist:
+            theta = (node.pos_hist[-1] % TICKS_PER_REV) / TICKS_PER_REV * 2 * math.pi
+            x = math.cos(theta)
+            y = math.sin(theta)
+            vector_line.set_data([0, x], [0, y])
+
             line.set_data(node.time_hist, node.pos_hist)
-            ax.relim()
-            ax.autoscale_view()
-        return line,
+            ax_hist.relim()
+            ax_hist.autoscale_view()
+
+        return vector_line, line
 
     ani = animation.FuncAnimation(fig, update_plot, interval=100)
     try:

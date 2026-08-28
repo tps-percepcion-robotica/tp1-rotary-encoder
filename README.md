@@ -93,6 +93,7 @@ ros2 topic echo /encoder_rpm
 ## Visualización y log de datos
 
 ```bash
+#en una terminal con ros2 sourceado
 cd pc_tools
 python3 encoder_monitor.py
 ```
