@@ -183,6 +183,8 @@ static void micro_ros_task(void *arg)
         RCCHECK(rmw_uros_options_set_udp_address(CONFIG_MICRO_ROS_AGENT_IP,
                                              CONFIG_MICRO_ROS_AGENT_PORT,
                                              rmw_options));
+
+        rmw_uros_options_set_client_key(esp_random(), rmw_options);
                                              
 #endif
 
