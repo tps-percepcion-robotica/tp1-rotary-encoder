@@ -80,3 +80,4 @@ Desktop.ini
 components/micro_ros_espidf_component/
 
 pc_tools/encoder_log.csv
+.vscode
