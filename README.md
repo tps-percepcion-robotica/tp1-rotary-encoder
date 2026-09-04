@@ -2,6 +2,8 @@
 
 TP Integrador — FULGOR ROS2-IA
 
+Grupo: Francisco Soria, Martin Bravo, Cande Benavides, Dolores Gómez, Tatiana Pagano, Abigail Barbieri
+
 Firmware para ESP32 que lee un encoder incremental de cuadratura (KY-040) usando
 el periférico **PCNT** en modo 4x, y publica la posición (ticks) y la velocidad
 (RPM) calculadas como tópicos de **ROS2**, vía **micro-ROS**.
